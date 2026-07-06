@@ -478,19 +478,62 @@ if (process.env.DATABASE_URL) {
 
 const pool = new Pool(poolConfig);
 
+// pool.connect()
+//     .then(async (client) => {
+//         console.log("✓ Connected to PostgreSQL");
+
+//         // Show which database we connected to
+//         const result = await client.query("SELECT current_database(), current_user");
+//         console.log("  Database:", result.rows[0].current_database);
+//         console.log("  User:", result.rows[0].current_user);
+
+//         client.release();
+//     })
+//     .catch(err => {
+//         console.error("✗ Database connection failed:", err.message);
+//     });
+
+// Add this right after pool.connect() succeeds
 pool.connect()
     .then(async (client) => {
         console.log("✓ Connected to PostgreSQL");
 
-        // Show which database we connected to
-        const result = await client.query("SELECT current_database(), current_user");
-        console.log("  Database:", result.rows[0].current_database);
-        console.log("  User:", result.rows[0].current_user);
+        // Show connection info
+        const connInfo = await client.query(
+            "SELECT current_database(), current_user, inet_server_addr(), inet_server_port()"
+        );
+        console.log("=== DATABASE CONNECTION INFO ===");
+        console.log("Database:", connInfo.rows[0].current_database);
+        console.log("User:", connInfo.rows[0].current_user);
+        console.log("Server:", connInfo.rows[0].inet_server_addr);
+        console.log("Port:", connInfo.rows[0].inet_server_port);
+
+        // Show all tables
+        const tables = await client.query(`
+            SELECT schemaname, tablename 
+            FROM pg_tables 
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY tablename
+        `);
+        console.log("=== TABLES IN DATABASE ===");
+        if (tables.rows.length === 0) {
+            console.log("NO TABLES FOUND!");
+        } else {
+            tables.rows.forEach(row => {
+                console.log(`  ${row.schemaname}.${row.tablename}`);
+            });
+        }
+        console.log("=========================");
 
         client.release();
     })
     .catch(err => {
         console.error("✗ Database connection failed:", err.message);
+        console.error("  Connection string used:", 
+            process.env.DATABASE_URL ? 
+            "DATABASE_URL (set)" : 
+            `${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`
+        );
     });
 
 // ============================================
