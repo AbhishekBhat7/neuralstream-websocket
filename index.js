@@ -445,13 +445,11 @@ const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 
 // ============================================
-// DATABASE - Use DATABASE_URL for Railway
-// Falls back to individual vars for local
+// DATABASE
 // ============================================
 let poolConfig;
 
 if (process.env.DATABASE_URL) {
-    // Railway / Neon - use connection string
     console.log("Using DATABASE_URL connection");
     poolConfig = {
         connectionString: process.env.DATABASE_URL,
@@ -461,7 +459,6 @@ if (process.env.DATABASE_URL) {
         connectionTimeoutMillis: 5000,
     };
 } else {
-    // Local development
     console.log("Using individual DB vars");
     poolConfig = {
         host: process.env.DB_HOST,
@@ -478,62 +475,28 @@ if (process.env.DATABASE_URL) {
 
 const pool = new Pool(poolConfig);
 
-// pool.connect()
-//     .then(async (client) => {
-//         console.log("✓ Connected to PostgreSQL");
-
-//         // Show which database we connected to
-//         const result = await client.query("SELECT current_database(), current_user");
-//         console.log("  Database:", result.rows[0].current_database);
-//         console.log("  User:", result.rows[0].current_user);
-
-//         client.release();
-//     })
-//     .catch(err => {
-//         console.error("✗ Database connection failed:", err.message);
-//     });
-
-// Add this right after pool.connect() succeeds
 pool.connect()
     .then(async (client) => {
         console.log("✓ Connected to PostgreSQL");
 
-        // Show connection info
         const connInfo = await client.query(
-            "SELECT current_database(), current_user, inet_server_addr(), inet_server_port()"
+            "SELECT current_database(), current_user"
         );
-        console.log("=== DATABASE CONNECTION INFO ===");
         console.log("Database:", connInfo.rows[0].current_database);
         console.log("User:", connInfo.rows[0].current_user);
-        console.log("Server:", connInfo.rows[0].inet_server_addr);
-        console.log("Port:", connInfo.rows[0].inet_server_port);
 
-        // Show all tables
         const tables = await client.query(`
-            SELECT schemaname, tablename 
+            SELECT tablename 
             FROM pg_tables 
-            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            WHERE schemaname = 'public'
             ORDER BY tablename
         `);
-        console.log("=== TABLES IN DATABASE ===");
-        if (tables.rows.length === 0) {
-            console.log("NO TABLES FOUND!");
-        } else {
-            tables.rows.forEach(row => {
-                console.log(`  ${row.schemaname}.${row.tablename}`);
-            });
-        }
-        console.log("=========================");
+        console.log("Tables:", tables.rows.map(r => r.tablename).join(", "));
 
         client.release();
     })
     .catch(err => {
         console.error("✗ Database connection failed:", err.message);
-        console.error("  Connection string used:", 
-            process.env.DATABASE_URL ? 
-            "DATABASE_URL (set)" : 
-            `${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`
-        );
     });
 
 // ============================================
@@ -588,7 +551,7 @@ function broadcastBinary(sessionId, data) {
 function verifyToken(token) {
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log("Token verified for userId:", decoded.userId);
+        console.log("Token verified - userId:", decoded.userId);
         return decoded;
     } catch (err) {
         console.error("Token verify failed:", err.message);
@@ -597,70 +560,95 @@ function verifyToken(token) {
 }
 
 // ============================================
-// SESSION VALIDATION - With detailed logging
+// DATABASE QUERIES - Fixed column names
 // ============================================
+
+// Validate that user is the host of the session
+// live_sessions: session_id, host_user_id, device_id, status
 async function validateHost(sessionId, userId) {
     try {
         console.log(`validateHost - sessionId: ${sessionId} userId: ${userId}`);
 
-        // First check what sessions exist
-        const allSessions = await pool.query(
-            "SELECT id, host_user_id, status FROM sessions LIMIT 5"
-        );
-        console.log("Existing sessions:", JSON.stringify(allSessions.rows));
-
-        // Now validate
         const result = await pool.query(
-            "SELECT id FROM sessions WHERE id = $1 AND host_user_id = $2",
+            `SELECT session_id 
+             FROM live_sessions 
+             WHERE session_id = $1 
+             AND host_user_id = $2
+             AND status = 'ACTIVE'`,
             [sessionId, userId]
         );
 
-        console.log(`validateHost result: ${result.rows.length} rows found`);
+        console.log(`validateHost - found: ${result.rows.length} rows`);
         return result.rows.length > 0;
 
     } catch (err) {
         console.error("validateHost error:", err.message);
-        console.error("validateHost stack:", err.stack);
         return false;
     }
 }
 
+// Add viewer to session
+// session_viewers: session_id, viewer_user_id, device_id, status
 async function joinSession(sessionId, userId, deviceId) {
     try {
+        console.log(`joinSession - sessionId: ${sessionId} userId: ${userId} deviceId: ${deviceId}`);
+
         await pool.query(
-            `INSERT INTO session_viewers (session_id, user_id, device_id, joined_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT (session_id, device_id) 
-             DO UPDATE SET joined_at = NOW()`,
+            `INSERT INTO session_viewers 
+                (session_id, viewer_user_id, device_id, status, joined_at)
+             VALUES ($1, $2, $3, 'CONNECTED', NOW())
+             ON CONFLICT (session_id, device_id)
+             DO UPDATE SET 
+                status = 'CONNECTED',
+                joined_at = NOW(),
+                left_at = NULL`,
             [sessionId, userId, deviceId]
         );
+
+        console.log("joinSession success");
+
     } catch (err) {
         console.error("joinSession error:", err.message);
-        throw new Error("Could not join session");
+        throw new Error("Could not join session: " + err.message);
     }
 }
 
+// Mark viewer as disconnected
 async function leaveSession(sessionId, userId, deviceId) {
     try {
+        console.log(`leaveSession - sessionId: ${sessionId} userId: ${userId}`);
+
         await pool.query(
             `UPDATE session_viewers 
-             SET left_at = NOW() 
-             WHERE session_id = $1 AND user_id = $2 AND device_id = $3`,
+             SET status = 'DISCONNECTED', left_at = NOW()
+             WHERE session_id = $1 
+             AND viewer_user_id = $2 
+             AND device_id = $3`,
             [sessionId, userId, deviceId]
         );
+
+        console.log("leaveSession success");
+
     } catch (err) {
         console.error("leaveSession error:", err.message);
     }
 }
 
+// Mark session as ended
 async function endSession(sessionId, userId) {
     try {
+        console.log(`endSession - sessionId: ${sessionId} userId: ${userId}`);
+
         await pool.query(
-            `UPDATE sessions 
-             SET ended_at = NOW(), status = 'ended'
-             WHERE id = $1 AND host_user_id = $2`,
+            `UPDATE live_sessions 
+             SET status = 'ENDED', ended_at = NOW()
+             WHERE session_id = $1 
+             AND host_user_id = $2`,
             [sessionId, userId]
         );
+
+        console.log("endSession success");
+
     } catch (err) {
         console.error("endSession error:", err.message);
     }
@@ -669,15 +657,44 @@ async function endSession(sessionId, userId) {
 // ============================================
 // HTTP SERVER
 // ============================================
-const httpServer = http.createServer((req, res) => {
+const httpServer = http.createServer(async (req, res) => {
+
+    // Health check
     if (req.url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
             status: "ok",
             connections: wss ? wss.clients.size : 0,
-            sessions: sessions.size,
+            activeSessions: sessions.size,
             timestamp: new Date().toISOString()
         }));
+        return;
+    }
+
+    // DB check - verify tables and data
+    if (req.url === "/db-check") {
+        try {
+            const tables = await pool.query(`
+                SELECT tablename 
+                FROM pg_tables 
+                WHERE schemaname = 'public'
+                ORDER BY tablename
+            `);
+
+            const liveSessions = await pool.query(
+                "SELECT session_id, host_user_id, device_id, status FROM live_sessions LIMIT 5"
+            );
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+                tables: tables.rows.map(r => r.tablename),
+                liveSessions: liveSessions.rows
+            }, null, 2));
+
+        } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err.message }));
+        }
         return;
     }
 
@@ -739,7 +756,7 @@ wss.on("connection", (ws, request) => {
         ws.isAlive = true;
     });
 
-    // Auth timeout
+    // Auth timeout - 15 seconds
     const authTimeout = setTimeout(() => {
         if (!ws.isAuthenticated) {
             console.log(`Auth timeout: ${ws.id}`);
@@ -754,7 +771,7 @@ wss.on("connection", (ws, request) => {
         ws.isAlive = true;
 
         try {
-            // Binary telemetry
+            // Binary - telemetry
             if (isBinary) {
                 if (!ws.isAuthenticated || ws.role !== "host" || !ws.sessionId) return;
                 broadcastBinary(ws.sessionId, data);
@@ -770,7 +787,7 @@ wss.on("connection", (ws, request) => {
                 return;
             }
 
-            console.log(`[${ws.id}] Message type: ${message.type}`);
+            console.log(`[${ws.id}] type: ${message.type}`);
 
             // ----------------------------------------
             // AUTH
@@ -799,7 +816,7 @@ wss.on("connection", (ws, request) => {
                 ws.isAuthenticated = true;
                 ws.user = decoded;
 
-                console.log(`Auth success: userId=${decoded.userId}`);
+                console.log(`Auth success - userId: ${decoded.userId}`);
 
                 ws.send(JSON.stringify({
                     type: "auth_success",
@@ -808,7 +825,7 @@ wss.on("connection", (ws, request) => {
                 return;
             }
 
-            // Require auth
+            // Require auth for everything below
             if (!ws.isAuthenticated) {
                 ws.send(JSON.stringify({ type: "error", message: "Authenticate first" }));
                 return;
@@ -818,18 +835,24 @@ wss.on("connection", (ws, request) => {
             // HOST JOIN
             // ----------------------------------------
             if (message.type === "host") {
-                console.log(`Host request - sessionId: ${message.sessionId} userId: ${ws.user.userId}`);
 
                 if (!message.sessionId) {
                     ws.send(JSON.stringify({ type: "error", message: "sessionId required" }));
                     return;
                 }
 
-                const isValid = await validateHost(message.sessionId, ws.user.userId);
-                console.log(`Host validation result: ${isValid}`);
+                console.log(`Host request - sessionId: ${message.sessionId} userId: ${ws.user.userId}`);
+
+                const isValid = await validateHost(
+                    message.sessionId,
+                    ws.user.userId
+                );
 
                 if (!isValid) {
-                    ws.send(JSON.stringify({ type: "error", message: "Unauthorized host" }));
+                    ws.send(JSON.stringify({
+                        type: "error",
+                        message: "Unauthorized host - session not found or not active"
+                    }));
                     ws.close(1008, "Unauthorized");
                     return;
                 }
@@ -843,7 +866,7 @@ wss.on("connection", (ws, request) => {
                     sessionId: message.sessionId
                 }));
 
-                console.log(`[HOST] userId=${ws.user.userId} sessionId=${message.sessionId}`);
+                console.log(`[HOST JOINED] userId: ${ws.user.userId} sessionId: ${message.sessionId}`);
                 return;
             }
 
@@ -851,18 +874,23 @@ wss.on("connection", (ws, request) => {
             // VIEWER JOIN
             // ----------------------------------------
             if (message.type === "viewer") {
-                console.log(`Viewer request - sessionId: ${message.sessionId}`);
 
                 if (!message.sessionId || !message.deviceId) {
                     ws.send(JSON.stringify({
                         type: "error",
-                        message: "sessionId & deviceId required"
+                        message: "sessionId and deviceId required"
                     }));
                     return;
                 }
 
+                console.log(`Viewer request - sessionId: ${message.sessionId} deviceId: ${message.deviceId}`);
+
                 try {
-                    await joinSession(message.sessionId, ws.user.userId, message.deviceId);
+                    await joinSession(
+                        message.sessionId,
+                        ws.user.userId,
+                        message.deviceId
+                    );
                 } catch (err) {
                     ws.send(JSON.stringify({ type: "error", message: err.message }));
                     return;
@@ -878,11 +906,11 @@ wss.on("connection", (ws, request) => {
                     sessionId: message.sessionId
                 }));
 
-                console.log(`[VIEWER] userId=${ws.user.userId} deviceId=${message.deviceId}`);
+                console.log(`[VIEWER JOINED] userId: ${ws.user.userId} deviceId: ${message.deviceId}`);
                 return;
             }
 
-            // Unknown
+            // Unknown message type
             ws.send(JSON.stringify({
                 type: "error",
                 message: `Unknown message type: ${message.type}`
@@ -904,14 +932,21 @@ wss.on("connection", (ws, request) => {
 
         try {
             if (ws.role === "viewer" && ws.sessionId && ws.deviceId) {
-                await leaveSession(ws.sessionId, ws.user.userId, ws.deviceId);
+                await leaveSession(
+                    ws.sessionId,
+                    ws.user.userId,
+                    ws.deviceId
+                );
             }
+
             if (ws.role === "host" && ws.sessionId) {
                 try {
                     await endSession(ws.sessionId, ws.user.userId);
                 } catch (_) {}
             }
+
             removeClient(ws);
+
         } catch (err) {
             console.error("Cleanup error:", err.message);
         }
@@ -932,7 +967,7 @@ wss.on("close", () => {
 });
 
 // ============================================
-// START SERVER
+// START
 // ============================================
 const PORT = process.env.PORT || 3000;
 
