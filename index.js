@@ -1,442 +1,3 @@
-// require("dotenv").config();
-
-// const http = require("http");
-// const WebSocket = require("ws");
-// const { Pool } = require("pg");
-// const jwt = require("jsonwebtoken");
-
-// // ============================================
-// // DATABASE
-// // ============================================
-// const pool = new Pool({
-//     host: process.env.DB_HOST,
-//     port: parseInt(process.env.DB_PORT) || 5432,
-//     user: process.env.DB_USER,
-//     password: process.env.DB_PASSWORD,
-//     database: process.env.DB_NAME,
-//     ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
-//     max: 10,
-//     idleTimeoutMillis: 30000,
-//     connectionTimeoutMillis: 5000,
-// });
-
-// pool.connect()
-//     .then(client => {
-//         console.log("✓ Connected to PostgreSQL");
-//         client.release();
-//     })
-//     .catch(err => {
-//         console.error("✗ Database connection failed:", err.message);
-//     });
-
-// // ============================================
-// // SESSION MANAGER
-// // ============================================
-// const sessions = new Map();
-// // sessions = {
-// //   sessionId: { host: ws, viewers: Set<ws> }
-// // }
-
-// function getSession(sessionId) {
-//     if (!sessions.has(sessionId)) {
-//         sessions.set(sessionId, { host: null, viewers: new Set() });
-//     }
-//     return sessions.get(sessionId);
-// }
-
-// function setHost(sessionId, ws) {
-//     const session = getSession(sessionId);
-//     session.host = ws;
-// }
-
-// function addViewer(sessionId, ws) {
-//     const session = getSession(sessionId);
-//     session.viewers.add(ws);
-// }
-
-// function removeClient(ws) {
-//     sessions.forEach((session, sessionId) => {
-//         if (session.host === ws) {
-//             session.host = null;
-//         }
-//         session.viewers.delete(ws);
-
-//         // Cleanup empty sessions
-//         if (!session.host && session.viewers.size === 0) {
-//             sessions.delete(sessionId);
-//         }
-//     });
-// }
-
-// function broadcastBinary(sessionId, data) {
-//     const session = sessions.get(sessionId);
-//     if (!session) return;
-
-//     session.viewers.forEach((viewer) => {
-//         if (viewer.readyState === WebSocket.OPEN) {
-//             viewer.send(data);
-//         }
-//     });
-// }
-
-// // ============================================
-// // AUTH
-// // ============================================
-// function verifyToken(token) {
-//     try {
-//         return jwt.verify(token, process.env.JWT_SECRET);
-//     } catch (err) {
-//         console.error("Token verify failed:", err.message);
-//         return null;
-//     }
-// }
-
-// // ============================================
-// // SESSION VALIDATION
-// // ============================================
-// async function validateHost(sessionId, userId) {
-//     try {
-//         const result = await pool.query(
-//             "SELECT id FROM sessions WHERE id = $1 AND host_user_id = $2",
-//             [sessionId, userId]
-//         );
-//         return result.rows.length > 0;
-//     } catch (err) {
-//         console.error("validateHost error:", err.message);
-//         return false;
-//     }
-// }
-
-// async function joinSession(sessionId, userId, deviceId) {
-//     try {
-//         await pool.query(
-//             `INSERT INTO session_viewers (session_id, user_id, device_id, joined_at)
-//              VALUES ($1, $2, $3, NOW())
-//              ON CONFLICT (session_id, device_id) DO UPDATE SET joined_at = NOW()`,
-//             [sessionId, userId, deviceId]
-//         );
-//     } catch (err) {
-//         console.error("joinSession error:", err.message);
-//         throw new Error("Could not join session");
-//     }
-// }
-
-// async function leaveSession(sessionId, userId, deviceId) {
-//     try {
-//         await pool.query(
-//             `UPDATE session_viewers 
-//              SET left_at = NOW() 
-//              WHERE session_id = $1 AND user_id = $2 AND device_id = $3`,
-//             [sessionId, userId, deviceId]
-//         );
-//     } catch (err) {
-//         console.error("leaveSession error:", err.message);
-//     }
-// }
-
-// async function endSession(sessionId, userId) {
-//     try {
-//         await pool.query(
-//             `UPDATE sessions 
-//              SET ended_at = NOW(), status = 'ended'
-//              WHERE id = $1 AND host_user_id = $2`,
-//             [sessionId, userId]
-//         );
-//     } catch (err) {
-//         console.error("endSession error:", err.message);
-//     }
-// }
-
-// // ============================================
-// // HTTP SERVER
-// // ============================================
-// const httpServer = http.createServer((req, res) => {
-//     // Health check endpoint
-//     if (req.url === "/health") {
-//         res.writeHead(200, { "Content-Type": "application/json" });
-//         res.end(JSON.stringify({
-//             status: "ok",
-//             connections: wss ? wss.clients.size : 0,
-//             sessions: sessions.size,
-//             timestamp: new Date().toISOString()
-//         }));
-//         return;
-//     }
-
-//     res.writeHead(200, { "Content-Type": "text/plain" });
-//     res.end("NeuralStream WebSocket Server");
-// });
-
-// // ============================================
-// // WEBSOCKET SERVER
-// // ============================================
-// const wss = new WebSocket.Server({
-//     server: httpServer,
-//     path: "/ws",
-//     maxPayload: 5 * 1024 * 1024,
-//     perMessageDeflate: false
-// });
-
-// console.log("WebSocket Server Initialized");
-
-// // ============================================
-// // HEARTBEAT
-// // ============================================
-// const heartbeat = setInterval(() => {
-//     console.log(`Heartbeat - Active clients: ${wss.clients.size}`);
-
-//     wss.clients.forEach((ws) => {
-//         if (ws.isAlive === false) {
-//             console.log(`Terminating stale: ${ws._ip}`);
-//             return ws.terminate();
-//         }
-//         ws.isAlive = false;
-//         ws.ping();
-//     });
-// }, 30000);
-
-// // ============================================
-// // CONNECTION HANDLER
-// // ============================================
-// wss.on("connection", (ws, request) => {
-
-//     const ip =
-//         request.headers["x-forwarded-for"] ||
-//         request.socket.remoteAddress ||
-//         "unknown";
-
-//     ws._ip = ip;
-//     ws.isAlive = true;
-//     ws.isAuthenticated = false;
-//     ws.user = null;
-//     ws.role = null;
-//     ws.sessionId = null;
-//     ws.deviceId = null;
-//     ws.id = crypto.randomUUID();
-
-//     console.log(`Connected: ${ip} | ID: ${ws.id}`);
-//     console.log(`Total clients: ${wss.clients.size}`);
-
-//     // Pong handler
-//     ws.on("pong", () => {
-//         ws.isAlive = true;
-//     });
-
-//     // Auth timeout - 15 seconds to authenticate
-//     const authTimeout = setTimeout(() => {
-//         if (!ws.isAuthenticated) {
-//             console.log(`Auth timeout: ${ws.id}`);
-//             ws.close(1008, "Authentication timeout");
-//         }
-//     }, 15000);
-
-//     // ----------------------------------------
-//     // Message Handler
-//     // ----------------------------------------
-//     ws.on("message", async (data, isBinary) => {
-//         ws.isAlive = true;
-
-//         try {
-//             // Binary - telemetry broadcast
-//             if (isBinary) {
-//                 if (!ws.isAuthenticated || ws.role !== "host" || !ws.sessionId) {
-//                     return;
-//                 }
-//                 broadcastBinary(ws.sessionId, data);
-//                 return;
-//             }
-
-//             // Parse JSON
-//             let message;
-//             try {
-//                 message = JSON.parse(data.toString());
-//             } catch {
-//                 ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-//                 return;
-//             }
-
-//             console.log(`Message from ${ws.id}: ${message.type}`);
-
-//             // ----------------------------------------
-//             // AUTH
-//             // ----------------------------------------
-//             if (message.type === "auth") {
-//                 clearTimeout(authTimeout);
-
-//                 if (ws.isAuthenticated) {
-//                     ws.send(JSON.stringify({ type: "error", message: "Already authenticated" }));
-//                     return;
-//                 }
-
-//                 if (!message.token) {
-//                     ws.send(JSON.stringify({ type: "error", message: "Token missing" }));
-//                     return;
-//                 }
-
-//                 const decoded = verifyToken(message.token);
-
-//                 if (!decoded) {
-//                     ws.send(JSON.stringify({ type: "auth_failed", message: "Invalid token" }));
-//                     ws.close(1008, "Authentication failed");
-//                     return;
-//                 }
-
-//                 ws.isAuthenticated = true;
-//                 ws.user = decoded;
-
-//                 console.log(`Auth success: ${decoded.userId}`);
-
-//                 ws.send(JSON.stringify({
-//                     type: "auth_success",
-//                     userId: decoded.userId
-//                 }));
-//                 return;
-//             }
-
-//             // Require auth for everything below
-//             if (!ws.isAuthenticated) {
-//                 ws.send(JSON.stringify({ type: "error", message: "Authenticate first" }));
-//                 return;
-//             }
-
-//             // ----------------------------------------
-//             // HOST JOIN
-//             // ----------------------------------------
-//             if (message.type === "host") {
-//                 if (!message.sessionId) {
-//                     ws.send(JSON.stringify({ type: "error", message: "sessionId required" }));
-//                     return;
-//                 }
-
-//                 const isValid = await validateHost(message.sessionId, ws.user.userId);
-
-//                 if (!isValid) {
-//                     ws.send(JSON.stringify({ type: "error", message: "Unauthorized host" }));
-//                     ws.close(1008, "Unauthorized");
-//                     return;
-//                 }
-
-//                 ws.role = "host";
-//                 ws.sessionId = message.sessionId;
-//                 setHost(message.sessionId, ws);
-
-//                 ws.send(JSON.stringify({
-//                     type: "host_joined",
-//                     sessionId: message.sessionId
-//                 }));
-
-//                 console.log(`[HOST] User: ${ws.user.userId} Session: ${message.sessionId}`);
-//                 return;
-//             }
-
-//             // ----------------------------------------
-//             // VIEWER JOIN
-//             // ----------------------------------------
-//             if (message.type === "viewer") {
-//                 if (!message.sessionId || !message.deviceId) {
-//                     ws.send(JSON.stringify({
-//                         type: "error",
-//                         message: "sessionId & deviceId required"
-//                     }));
-//                     return;
-//                 }
-
-//                 try {
-//                     await joinSession(message.sessionId, ws.user.userId, message.deviceId);
-//                 } catch (err) {
-//                     ws.send(JSON.stringify({ type: "error", message: err.message }));
-//                     return;
-//                 }
-
-//                 ws.role = "viewer";
-//                 ws.sessionId = message.sessionId;
-//                 ws.deviceId = message.deviceId;
-//                 addViewer(message.sessionId, ws);
-
-//                 ws.send(JSON.stringify({
-//                     type: "viewer_joined",
-//                     sessionId: message.sessionId
-//                 }));
-
-//                 console.log(`[VIEWER] User: ${ws.user.userId} Device: ${message.deviceId}`);
-//                 return;
-//             }
-
-//             // Unknown type
-//             ws.send(JSON.stringify({
-//                 type: "error",
-//                 message: `Unknown message type: ${message.type}`
-//             }));
-
-//         } catch (err) {
-//             console.error("Message error:", err.message);
-//             ws.send(JSON.stringify({ type: "error", message: "Internal Server Error" }));
-//         }
-//     });
-
-//     // ----------------------------------------
-//     // Disconnect
-//     // ----------------------------------------
-//     ws.on("close", async (code) => {
-//         console.log(`Disconnected: ${ws.id} Code: ${code}`);
-//         clearTimeout(authTimeout);
-
-//         try {
-//             if (ws.role === "viewer" && ws.sessionId && ws.deviceId) {
-//                 await leaveSession(ws.sessionId, ws.user.userId, ws.deviceId);
-//             }
-
-//             if (ws.role === "host" && ws.sessionId) {
-//                 try {
-//                     await endSession(ws.sessionId, ws.user.userId);
-//                 } catch (_) {}
-//             }
-
-//             removeClient(ws);
-//         } catch (err) {
-//             console.error("Cleanup error:", err.message);
-//         }
-//     });
-
-//     ws.on("error", (err) => {
-//         console.error(`Socket error [${ws.id}]:`, err.message);
-//     });
-// });
-
-// // ============================================
-// // SERVER EVENTS
-// // ============================================
-// wss.on("error", (err) => {
-//     console.error("WebSocket Server Error:", err.message);
-// });
-
-// wss.on("close", () => {
-//     clearInterval(heartbeat);
-//     console.log("WebSocket Server Closed");
-// });
-
-// // ============================================
-// // START
-// // ============================================
-// const PORT = process.env.PORT || 3000;
-
-// httpServer.listen(PORT, "0.0.0.0", () => {
-//     console.log(`✓ WebSocket Server running on port ${PORT}`);
-//     console.log(`  Health: http://localhost:${PORT}/health`);
-//     console.log(`  WS: ws://localhost:${PORT}/ws`);
-// });
-
-// // Graceful shutdown
-// process.on("SIGTERM", () => {
-//     console.log("Shutting down...");
-//     clearInterval(heartbeat);
-//     wss.clients.forEach((ws) => ws.close(1001, "Server shutting down"));
-//     wss.close();
-//     pool.end();
-//     httpServer.close();
-// });
-
-
 require("dotenv").config();
 
 const http = require("http");
@@ -459,7 +20,6 @@ if (process.env.DATABASE_URL) {
         connectionTimeoutMillis: 5000,
     };
 } else {
-    console.log("Using individual DB vars");
     poolConfig = {
         host: process.env.DB_HOST,
         port: parseInt(process.env.DB_PORT) || 5432,
@@ -478,71 +38,420 @@ const pool = new Pool(poolConfig);
 pool.connect()
     .then(async (client) => {
         console.log("✓ Connected to PostgreSQL");
-
-        const connInfo = await client.query(
-            "SELECT current_database(), current_user"
-        );
-        console.log("Database:", connInfo.rows[0].current_database);
-        console.log("User:", connInfo.rows[0].current_user);
-
+        const info = await client.query("SELECT current_database(), current_user");
+        console.log("Database:", info.rows[0].current_database);
+        console.log("User:", info.rows[0].current_user);
         const tables = await client.query(`
-            SELECT tablename 
-            FROM pg_tables 
-            WHERE schemaname = 'public'
-            ORDER BY tablename
+            SELECT tablename FROM pg_tables 
+            WHERE schemaname = 'public' ORDER BY tablename
         `);
         console.log("Tables:", tables.rows.map(r => r.tablename).join(", "));
-
         client.release();
     })
-    .catch(err => {
-        console.error("✗ Database connection failed:", err.message);
-    });
+    .catch(err => console.error("✗ DB connection failed:", err.message));
 
 // ============================================
-// SESSION MANAGER
+// PACKET PROTOCOL
+// ============================================
+//
+// SINGLE PACKET (small data):
+// Byte 0:      0x01 (type = SINGLE)
+// Byte 1-4:    Uint32 sequence number
+// Byte 5-12:   Float64 timestamp ms
+// Byte 13-16:  Uint32 channel count
+// Byte 17-20:  Uint32 sample rate Hz
+// Byte 21-24:  Uint32 samples per channel
+// Byte 25+:    Float32[] sample data
+//              (Float32 = 4 bytes, faster than Float64 for streaming)
+//
+// CHUNKED PACKET (large data split by BLE MTU):
+// Byte 0:      0x02=START 0x03=MIDDLE 0x04=END
+// Byte 1-4:    Uint32 stream ID (same for all chunks of one packet)
+// Byte 5-6:    Uint16 chunk index (0 based)
+// Byte 7-8:    Uint16 total chunks
+// Byte 9-12:   Uint32 total reassembled size
+// Byte 13+:    payload bytes
+//
+// ============================================
+
+const PTYPE = {
+    SINGLE:       0x01,
+    CHUNK_START:  0x02,
+    CHUNK_MIDDLE: 0x03,
+    CHUNK_END:    0x04
+};
+
+// Header sizes in bytes
+const SINGLE_HDR  = 25;
+const CHUNK_HDR   = 13;
+
+// Limits
+const MAX_PACKET_SIZE     = 50  * 1024 * 1024; // 50MB
+const MAX_VIEWERS         = 50;                 // max viewers per session
+const CHUNK_TIMEOUT_MS    = 8000;               // drop incomplete chunks after 8s
+const VIEWER_BUFFER_HIGH  = 16 * 1024 * 1024;  // 16MB - pause host if viewer is slow
+const HEARTBEAT_MS        = 20000;              // ping every 20s
+
+// ============================================
+// FAST BINARY PARSER
+// Reads header without copying buffer
+// ============================================
+function readSingleHeader(buf) {
+    // Need at least SINGLE_HDR bytes
+    if (buf.length < SINGLE_HDR) return null;
+
+    try {
+        // Use DataView directly on buffer - no copy
+        const dv = new DataView(
+            buf.buffer,
+            buf.byteOffset,
+            buf.byteLength
+        );
+        return {
+            type:            dv.getUint8(0),
+            sequence:        dv.getUint32(1,  true),
+            timestamp:       dv.getFloat64(5, true),
+            channelCount:    dv.getUint32(13, true),
+            sampleRate:      dv.getUint32(17, true),
+            samplesPerCh:    dv.getUint32(21, true),
+            // payload starts at byte 25
+            payload:         buf.slice(SINGLE_HDR)
+        };
+    } catch {
+        return null;
+    }
+}
+
+function readChunkHeader(buf) {
+    if (buf.length < CHUNK_HDR) return null;
+
+    try {
+        const dv = new DataView(
+            buf.buffer,
+            buf.byteOffset,
+            buf.byteLength
+        );
+        return {
+            type:        dv.getUint8(0),
+            streamId:    dv.getUint32(1,  true),
+            chunkIndex:  dv.getUint16(5,  true),
+            totalChunks: dv.getUint16(7,  true),
+            totalSize:   dv.getUint32(9,  true),
+            payload:     buf.slice(CHUNK_HDR)
+        };
+    } catch {
+        return null;
+    }
+}
+
+// ============================================
+// CHUNK REASSEMBLER
+// Per session - handles multiple concurrent streams
+// ============================================
+class ChunkReassembler {
+    constructor(sessionId) {
+        this.sessionId  = sessionId;
+        this.streams    = new Map();
+        // streamId -> {
+        //   chunks:      Map<index, Buffer>
+        //   totalChunks: number
+        //   totalSize:   number
+        //   receivedAt:  number (timestamp)
+        //   timer:       timeout handle
+        // }
+
+        this._cleanup = setInterval(
+            () => this._sweepStale(),
+            CHUNK_TIMEOUT_MS
+        );
+    }
+
+    // Returns complete Buffer when all chunks received, else null
+    push(buf) {
+        const h = readChunkHeader(buf);
+        if (!h) {
+            console.warn(`[Reassembler] Bad chunk header session=${this.sessionId}`);
+            return null;
+        }
+
+        const { streamId, chunkIndex, totalChunks, totalSize, payload } = h;
+
+        // Reject oversized packets
+        if (totalSize > MAX_PACKET_SIZE) {
+            console.error(`[Reassembler] Packet too large ${totalSize} bytes`);
+            return null;
+        }
+
+        // Init stream entry
+        if (!this.streams.has(streamId)) {
+            this.streams.set(streamId, {
+                chunks:      new Map(),
+                totalChunks,
+                totalSize,
+                receivedAt:  Date.now(),
+                // Auto-expire this stream if not completed in time
+                timer: setTimeout(() => {
+                    if (this.streams.has(streamId)) {
+                        const s = this.streams.get(streamId);
+                        console.warn(
+                            `[Reassembler] Timeout streamId=${streamId} ` +
+                            `got=${s.chunks.size}/${totalChunks}`
+                        );
+                        this.streams.delete(streamId);
+                    }
+                }, CHUNK_TIMEOUT_MS)
+            });
+        }
+
+        const stream = this.streams.get(streamId);
+
+        // Duplicate chunk guard
+        if (stream.chunks.has(chunkIndex)) {
+            console.warn(`[Reassembler] Duplicate chunk ${chunkIndex} streamId=${streamId}`);
+            return null;
+        }
+
+        stream.chunks.set(chunkIndex, payload);
+
+        // All chunks received?
+        if (stream.chunks.size !== totalChunks) {
+            return null; // Still waiting
+        }
+
+        // All chunks received - reassemble in ORDER
+        clearTimeout(stream.timer);
+        this.streams.delete(streamId);
+
+        const parts = [];
+        for (let i = 0; i < totalChunks; i++) {
+            const chunk = stream.chunks.get(i);
+            if (!chunk) {
+                // Gap detected - should not happen but guard anyway
+                console.error(`[Reassembler] Gap at chunk ${i} streamId=${streamId}`);
+                return null;
+            }
+            parts.push(chunk);
+        }
+
+        const complete = Buffer.concat(parts);
+
+        console.log(
+            `[Reassembler] Reassembled streamId=${streamId} ` +
+            `chunks=${totalChunks} size=${complete.length}`
+        );
+
+        return complete;
+    }
+
+    _sweepStale() {
+        const now = Date.now();
+        this.streams.forEach((stream, streamId) => {
+            if (now - stream.receivedAt > CHUNK_TIMEOUT_MS) {
+                clearTimeout(stream.timer);
+                this.streams.delete(streamId);
+                console.warn(`[Reassembler] Swept stale streamId=${streamId}`);
+            }
+        });
+    }
+
+    destroy() {
+        clearInterval(this._cleanup);
+        this.streams.forEach(s => clearTimeout(s.timer));
+        this.streams.clear();
+    }
+}
+
+// ============================================
+// GLOBAL STATS
+// ============================================
+const stats = {
+    packetsSent:       0,
+    bytesForwarded:    0,
+    packetsDropped:    0,
+    chunksReceived:    0,
+    packetsReassembled:0,
+    viewerSlowDrops:   0,
+
+    record(bytes)  { this.packetsSent++;        this.bytesForwarded += bytes; },
+    drop()         { this.packetsDropped++;                                   },
+    chunk()        { this.chunksReceived++;                                   },
+    reassembled()  { this.packetsReassembled++;                               },
+    slowDrop()     { this.viewerSlowDrops++;                                  },
+
+    snapshot() {
+        return {
+            packetsSent:        this.packetsSent,
+            bytesForwarded:     this.bytesForwarded,
+            mbForwarded:        (this.bytesForwarded / 1048576).toFixed(2),
+            packetsDropped:     this.packetsDropped,
+            chunksReceived:     this.chunksReceived,
+            packetsReassembled: this.packetsReassembled,
+            viewerSlowDrops:    this.viewerSlowDrops
+        };
+    }
+};
+
+// ============================================
+// SESSION STORE
 // ============================================
 const sessions = new Map();
+// sessionId (string) -> {
+//   host:        ws | null
+//   viewers:     Map<deviceId, ws>
+//   reassembler: ChunkReassembler
+//   stats: { packetsIn, bytesIn, packetsOut, chunksIn, reassembled }
+// }
 
-function getSession(sessionId) {
+function getOrCreateSession(sessionId) {
     if (!sessions.has(sessionId)) {
-        sessions.set(sessionId, { host: null, viewers: new Set() });
+        sessions.set(sessionId, {
+            host:        null,
+            viewers:     new Map(),
+            reassembler: new ChunkReassembler(sessionId),
+            stats: {
+                packetsIn:   0,
+                bytesIn:     0,
+                packetsOut:  0,
+                chunksIn:    0,
+                reassembled: 0,
+                startedAt:   new Date().toISOString()
+            }
+        });
     }
     return sessions.get(sessionId);
 }
 
-function setHost(sessionId, ws) {
-    const session = getSession(sessionId);
-    session.host = ws;
+function destroySession(sessionId) {
+    const s = sessions.get(sessionId);
+    if (s) {
+        s.reassembler.destroy();
+        sessions.delete(sessionId);
+        console.log(`[Session] Destroyed session=${sessionId}`);
+    }
 }
 
-function addViewer(sessionId, ws) {
-    const session = getSession(sessionId);
-    session.viewers.add(ws);
+// ============================================
+// BROADCAST - with backpressure check
+// ============================================
+function broadcastToViewers(sessionId, buf) {
+    const session = sessions.get(sessionId);
+    if (!session || session.viewers.size === 0) {
+        stats.drop();
+        return;
+    }
+
+    let sent = 0;
+    let dropped = 0;
+
+    session.viewers.forEach((viewer, deviceId) => {
+        if (viewer.readyState !== WebSocket.OPEN) {
+            dropped++;
+            return;
+        }
+
+        // Backpressure check
+        // If viewer socket buffer is too full, skip this packet
+        // This prevents memory overflow when viewer is slow
+        if (viewer.bufferedAmount > VIEWER_BUFFER_HIGH) {
+            console.warn(
+                `[Broadcast] Slow viewer deviceId=${deviceId} ` +
+                `buffered=${viewer.bufferedAmount} bytes - dropping packet`
+            );
+            stats.slowDrop();
+            dropped++;
+            return;
+        }
+
+        try {
+            viewer.send(buf);
+            sent++;
+        } catch (err) {
+            console.error(`[Broadcast] Send error deviceId=${deviceId}:`, err.message);
+            dropped++;
+        }
+    });
+
+    if (sent > 0) {
+        session.stats.packetsOut += sent;
+        stats.record(buf.length * sent);
+    }
+
+    if (dropped > 0) {
+        stats.drop();
+    }
 }
 
-function removeClient(ws) {
-    sessions.forEach((session, sessionId) => {
-        if (session.host === ws) {
-            session.host = null;
-        }
-        session.viewers.delete(ws);
+// ============================================
+// NOTIFY HELPERS
+// ============================================
+function sendToHost(sessionId, obj) {
+    const s = sessions.get(sessionId);
+    if (s?.host?.readyState === WebSocket.OPEN) {
+        s.host.send(JSON.stringify(obj));
+    }
+}
 
-        if (!session.host && session.viewers.size === 0) {
-            sessions.delete(sessionId);
-        }
+function sendToAllViewers(sessionId, obj) {
+    const s = sessions.get(sessionId);
+    if (!s) return;
+    const msg = JSON.stringify(obj);
+    s.viewers.forEach(v => {
+        if (v.readyState === WebSocket.OPEN) v.send(msg);
     });
 }
 
-function broadcastBinary(sessionId, data) {
-    const session = sessions.get(sessionId);
+// ============================================
+// HANDLE BINARY FROM HOST
+// ============================================
+function handleBinary(ws, buf) {
+    const session = sessions.get(ws.sessionId);
     if (!session) return;
 
-    session.viewers.forEach((viewer) => {
-        if (viewer.readyState === WebSocket.OPEN) {
-            viewer.send(data);
+    // Track host stats
+    ws._pktIn  = (ws._pktIn  || 0) + 1;
+    ws._bytesIn= (ws._bytesIn|| 0) + buf.length;
+
+    session.stats.packetsIn++;
+    session.stats.bytesIn += buf.length;
+
+    const ptype = buf[0];
+
+    // ----------------------------------------
+    // SINGLE - small packet, direct broadcast
+    // ----------------------------------------
+    if (ptype === PTYPE.SINGLE) {
+        if (buf.length < SINGLE_HDR) {
+            console.warn(`[Binary] Single packet too small: ${buf.length}`);
+            stats.drop();
+            return;
         }
-    });
+        broadcastToViewers(ws.sessionId, buf);
+        return;
+    }
+
+    // ----------------------------------------
+    // CHUNKED - large BLE packet, reassemble
+    // ----------------------------------------
+    if (
+        ptype === PTYPE.CHUNK_START  ||
+        ptype === PTYPE.CHUNK_MIDDLE ||
+        ptype === PTYPE.CHUNK_END
+    ) {
+        session.stats.chunksIn++;
+        stats.chunk();
+
+        const complete = session.reassembler.push(buf);
+        if (complete) {
+            session.stats.reassembled++;
+            stats.reassembled();
+            broadcastToViewers(ws.sessionId, complete);
+        }
+        return;
+    }
+
+    // Unknown type - broadcast raw (best effort)
+    console.warn(`[Binary] Unknown ptype=0x${ptype.toString(16)} size=${buf.length}`);
+    broadcastToViewers(ws.sessionId, buf);
 }
 
 // ============================================
@@ -550,147 +459,110 @@ function broadcastBinary(sessionId, data) {
 // ============================================
 function verifyToken(token) {
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log("Token verified - userId:", decoded.userId);
-        return decoded;
+        return jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
-        console.error("Token verify failed:", err.message);
+        console.error("[Auth] Token verify failed:", err.message);
         return null;
     }
 }
 
 // ============================================
-// DATABASE QUERIES - Fixed column names
+// DATABASE
 // ============================================
-
-// Validate that user is the host of the session
-// live_sessions: session_id, host_user_id, device_id, status
 async function validateHost(sessionId, userId) {
     try {
-        console.log(`validateHost - sessionId: ${sessionId} userId: ${userId}`);
-
-        const result = await pool.query(
-            `SELECT session_id 
-             FROM live_sessions 
-             WHERE session_id = $1 
-             AND host_user_id = $2
-             AND status = 'ACTIVE'`,
+        const r = await pool.query(
+            `SELECT session_id FROM live_sessions
+             WHERE session_id = $1
+             AND   host_user_id = $2
+             AND   status = 'ACTIVE'`,
             [sessionId, userId]
         );
-
-        console.log(`validateHost - found: ${result.rows.length} rows`);
-        return result.rows.length > 0;
-
+        return r.rows.length > 0;
     } catch (err) {
-        console.error("validateHost error:", err.message);
+        console.error("[DB] validateHost:", err.message);
         return false;
     }
 }
 
-// Add viewer to session
-// session_viewers: session_id, viewer_user_id, device_id, status
-async function joinSession(sessionId, userId, deviceId) {
-    try {
-        console.log(`joinSession - sessionId: ${sessionId} userId: ${userId} deviceId: ${deviceId}`);
-
-        await pool.query(
-            `INSERT INTO session_viewers 
-                (session_id, viewer_user_id, device_id, status, joined_at)
-             VALUES ($1, $2, $3, 'CONNECTED', NOW())
-             ON CONFLICT (session_id, device_id)
-             DO UPDATE SET 
-                status = 'CONNECTED',
-                joined_at = NOW(),
-                left_at = NULL`,
-            [sessionId, userId, deviceId]
-        );
-
-        console.log("joinSession success");
-
-    } catch (err) {
-        console.error("joinSession error:", err.message);
-        throw new Error("Could not join session: " + err.message);
-    }
+async function dbJoinSession(sessionId, userId, deviceId) {
+    await pool.query(
+        `INSERT INTO session_viewers
+            (session_id, viewer_user_id, device_id, status, joined_at)
+         VALUES ($1,$2,$3,'CONNECTED',NOW())
+         ON CONFLICT (session_id, device_id)
+         DO UPDATE SET status='CONNECTED', joined_at=NOW(), left_at=NULL`,
+        [sessionId, userId, deviceId]
+    );
 }
 
-// Mark viewer as disconnected
-async function leaveSession(sessionId, userId, deviceId) {
-    try {
-        console.log(`leaveSession - sessionId: ${sessionId} userId: ${userId}`);
-
-        await pool.query(
-            `UPDATE session_viewers 
-             SET status = 'DISCONNECTED', left_at = NOW()
-             WHERE session_id = $1 
-             AND viewer_user_id = $2 
-             AND device_id = $3`,
-            [sessionId, userId, deviceId]
-        );
-
-        console.log("leaveSession success");
-
-    } catch (err) {
-        console.error("leaveSession error:", err.message);
-    }
+async function dbLeaveSession(sessionId, userId, deviceId) {
+    await pool.query(
+        `UPDATE session_viewers
+         SET status='DISCONNECTED', left_at=NOW()
+         WHERE session_id=$1 AND viewer_user_id=$2 AND device_id=$3`,
+        [sessionId, userId, deviceId]
+    );
 }
 
-// Mark session as ended
-async function endSession(sessionId, userId) {
-    try {
-        console.log(`endSession - sessionId: ${sessionId} userId: ${userId}`);
-
-        await pool.query(
-            `UPDATE live_sessions 
-             SET status = 'ENDED', ended_at = NOW()
-             WHERE session_id = $1 
-             AND host_user_id = $2`,
-            [sessionId, userId]
-        );
-
-        console.log("endSession success");
-
-    } catch (err) {
-        console.error("endSession error:", err.message);
-    }
+async function dbEndSession(sessionId, userId) {
+    await pool.query(
+        `UPDATE live_sessions
+         SET status='ENDED', ended_at=NOW()
+         WHERE session_id=$1 AND host_user_id=$2`,
+        [sessionId, userId]
+    );
 }
 
 // ============================================
 // HTTP SERVER
 // ============================================
 const httpServer = http.createServer(async (req, res) => {
+    const url = req.url;
 
-    // Health check
-    if (req.url === "/health") {
+    if (url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
-            status: "ok",
-            connections: wss ? wss.clients.size : 0,
+            status:         "ok",
+            uptime:         process.uptime(),
+            connections:    wss?.clients.size ?? 0,
             activeSessions: sessions.size,
-            timestamp: new Date().toISOString()
+            stats:          stats.snapshot(),
+            timestamp:      new Date().toISOString()
         }));
         return;
     }
 
-    // DB check - verify tables and data
-    if (req.url === "/db-check") {
+    if (url === "/sessions") {
+        const out = [];
+        sessions.forEach((s, id) => {
+            out.push({
+                sessionId:     id,
+                hasHost:       s.host !== null,
+                viewerCount:   s.viewers.size,
+                viewers:       Array.from(s.viewers.keys()),
+                pendingChunks: s.reassembler.streams.size,
+                stats:         s.stats
+            });
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sessions: out, global: stats.snapshot() }, null, 2));
+        return;
+    }
+
+    if (url === "/db-check") {
         try {
-            const tables = await pool.query(`
-                SELECT tablename 
-                FROM pg_tables 
-                WHERE schemaname = 'public'
-                ORDER BY tablename
-            `);
-
-            const liveSessions = await pool.query(
-                "SELECT session_id, host_user_id, device_id, status FROM live_sessions LIMIT 5"
+            const t = await pool.query(
+                `SELECT tablename FROM pg_tables WHERE schemaname='public'`
             );
-
+            const ls = await pool.query(
+                `SELECT session_id, host_user_id, status FROM live_sessions LIMIT 5`
+            );
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
-                tables: tables.rows.map(r => r.tablename),
-                liveSessions: liveSessions.rows
+                tables: t.rows.map(r => r.tablename),
+                liveSessions: ls.rows
             }, null, 2));
-
         } catch (err) {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err.message }));
@@ -706,107 +578,107 @@ const httpServer = http.createServer(async (req, res) => {
 // WEBSOCKET SERVER
 // ============================================
 const wss = new WebSocket.Server({
-    server: httpServer,
-    path: "/ws",
-    maxPayload: 5 * 1024 * 1024,
-    perMessageDeflate: false
+    server:           httpServer,
+    path:             "/ws",
+    maxPayload:       MAX_PACKET_SIZE,
+    perMessageDeflate:false          // OFF - compression hurts real-time speed
 });
 
 console.log("WebSocket Server Initialized");
 
 // ============================================
-// HEARTBEAT
+// HEARTBEAT - detect dead connections fast
 // ============================================
-const heartbeat = setInterval(() => {
-    console.log(`Heartbeat - Active clients: ${wss.clients.size}`);
-
-    wss.clients.forEach((ws) => {
+const heartbeatTimer = setInterval(() => {
+    wss.clients.forEach(ws => {
         if (ws.isAlive === false) {
-            console.log(`Terminating stale: ${ws._ip}`);
+            console.log(`[Heartbeat] Terminating dead client ${ws._id}`);
             return ws.terminate();
         }
         ws.isAlive = false;
         ws.ping();
     });
-}, 30000);
+}, HEARTBEAT_MS);
 
 // ============================================
 // CONNECTION HANDLER
 // ============================================
-wss.on("connection", (ws, request) => {
+wss.on("connection", (ws, req) => {
 
-    const ip =
-        request.headers["x-forwarded-for"] ||
-        request.socket.remoteAddress ||
-        "unknown";
-
-    ws._ip = ip;
-    ws.isAlive = true;
+    // Connection metadata
+    ws._id       = crypto.randomUUID();
+    ws._ip       = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "?";
+    ws.isAlive   = true;
     ws.isAuthenticated = false;
-    ws.user = null;
-    ws.role = null;
+    ws.user      = null;
+    ws.role      = null;    // "host" | "viewer" | null
     ws.sessionId = null;
-    ws.deviceId = null;
-    ws.id = crypto.randomUUID();
+    ws.deviceId  = null;
+    ws._pktIn    = 0;
+    ws._bytesIn  = 0;
 
-    console.log(`Connected: ${ip} | ID: ${ws.id}`);
-    console.log(`Total clients: ${wss.clients.size}`);
+    console.log(`[WS] Connected id=${ws._id} ip=${ws._ip} total=${wss.clients.size}`);
 
-    ws.on("pong", () => {
-        ws.isAlive = true;
-    });
+    ws.on("pong", () => { ws.isAlive = true; });
+    ws.on("error", err => console.error(`[WS] Error id=${ws._id}:`, err.message));
 
-    // Auth timeout - 15 seconds
-    const authTimeout = setTimeout(() => {
+    // Must authenticate within 15s
+    const authTimer = setTimeout(() => {
         if (!ws.isAuthenticated) {
-            console.log(`Auth timeout: ${ws.id}`);
+            console.log(`[WS] Auth timeout id=${ws._id}`);
             ws.close(1008, "Authentication timeout");
         }
     }, 15000);
 
-    // ----------------------------------------
-    // Message Handler
-    // ----------------------------------------
-    ws.on("message", async (data, isBinary) => {
+    // ------------------------------------------
+    // MESSAGE HANDLER
+    // ------------------------------------------
+    ws.on("message", async (raw, isBinary) => {
         ws.isAlive = true;
 
         try {
-            // Binary - telemetry
+
+            // ======================================
+            // BINARY PATH - hot path, minimal work
+            // ======================================
             if (isBinary) {
-                if (!ws.isAuthenticated || ws.role !== "host" || !ws.sessionId) return;
-                broadcastBinary(ws.sessionId, data);
+                if (!ws.isAuthenticated || ws.role !== "host" || !ws.sessionId) {
+                    console.warn(`[Binary] Rejected from id=${ws._id} role=${ws.role}`);
+                    return;
+                }
+                handleBinary(ws, raw);
                 return;
             }
 
-            // Parse JSON
-            let message;
+            // ======================================
+            // JSON PATH
+            // ======================================
+            let msg;
             try {
-                message = JSON.parse(data.toString());
+                msg = JSON.parse(raw.toString());
             } catch {
                 ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
                 return;
             }
 
-            console.log(`[${ws.id}] type: ${message.type}`);
+            const { type } = msg;
 
-            // ----------------------------------------
+            // ------------------------------------------
             // AUTH
-            // ----------------------------------------
-            if (message.type === "auth") {
-                clearTimeout(authTimeout);
+            // ------------------------------------------
+            if (type === "auth") {
+                clearTimeout(authTimer);
 
                 if (ws.isAuthenticated) {
                     ws.send(JSON.stringify({ type: "error", message: "Already authenticated" }));
                     return;
                 }
-
-                if (!message.token) {
-                    ws.send(JSON.stringify({ type: "error", message: "Token missing" }));
+                if (!msg.token) {
+                    ws.send(JSON.stringify({ type: "error", message: "Token required" }));
                     return;
                 }
 
-                const decoded = verifyToken(message.token);
-
+                const decoded = verifyToken(msg.token);
                 if (!decoded) {
                     ws.send(JSON.stringify({ type: "auth_failed", message: "Invalid token" }));
                     ws.close(1008, "Authentication failed");
@@ -816,154 +688,257 @@ wss.on("connection", (ws, request) => {
                 ws.isAuthenticated = true;
                 ws.user = decoded;
 
-                console.log(`Auth success - userId: ${decoded.userId}`);
-
                 ws.send(JSON.stringify({
-                    type: "auth_success",
+                    type:   "auth_success",
                     userId: decoded.userId
                 }));
+
+                console.log(`[Auth] Success userId=${decoded.userId}`);
                 return;
             }
 
-            // Require auth for everything below
+            // Auth required for all below
             if (!ws.isAuthenticated) {
                 ws.send(JSON.stringify({ type: "error", message: "Authenticate first" }));
                 return;
             }
 
-            // ----------------------------------------
+            // ------------------------------------------
             // HOST JOIN
-            // ----------------------------------------
-            if (message.type === "host") {
-
-                if (!message.sessionId) {
+            // ------------------------------------------
+            if (type === "host") {
+                if (!msg.sessionId) {
                     ws.send(JSON.stringify({ type: "error", message: "sessionId required" }));
                     return;
                 }
 
-                console.log(`Host request - sessionId: ${message.sessionId} userId: ${ws.user.userId}`);
-
-                const isValid = await validateHost(
-                    message.sessionId,
-                    ws.user.userId
-                );
-
-                if (!isValid) {
-                    ws.send(JSON.stringify({
-                        type: "error",
-                        message: "Unauthorized host - session not found or not active"
-                    }));
+                const valid = await validateHost(msg.sessionId, ws.user.userId);
+                if (!valid) {
+                    ws.send(JSON.stringify({ type: "error", message: "Unauthorized host" }));
                     ws.close(1008, "Unauthorized");
                     return;
                 }
 
-                ws.role = "host";
-                ws.sessionId = message.sessionId;
-                setHost(message.sessionId, ws);
+                ws.role      = "host";
+                ws.sessionId = String(msg.sessionId);
+
+                const session    = getOrCreateSession(ws.sessionId);
+                session.host     = ws;
 
                 ws.send(JSON.stringify({
-                    type: "host_joined",
-                    sessionId: message.sessionId
+                    type:      "host_joined",
+                    sessionId: ws.sessionId
                 }));
 
-                console.log(`[HOST JOINED] userId: ${ws.user.userId} sessionId: ${message.sessionId}`);
+                console.log(`[Host] Joined userId=${ws.user.userId} session=${ws.sessionId}`);
                 return;
             }
 
-            // ----------------------------------------
+            // ------------------------------------------
             // VIEWER JOIN
-            // ----------------------------------------
-            if (message.type === "viewer") {
-
-                if (!message.sessionId || !message.deviceId) {
+            // ------------------------------------------
+            if (type === "viewer") {
+                if (!msg.sessionId || !msg.deviceId) {
                     ws.send(JSON.stringify({
-                        type: "error",
+                        type:    "error",
                         message: "sessionId and deviceId required"
                     }));
                     return;
                 }
 
-                console.log(`Viewer request - sessionId: ${message.sessionId} deviceId: ${message.deviceId}`);
+                const session = getOrCreateSession(String(msg.sessionId));
+
+                // Viewer limit guard
+                if (session.viewers.size >= MAX_VIEWERS) {
+                    ws.send(JSON.stringify({
+                        type:    "error",
+                        message: "Session is full"
+                    }));
+                    return;
+                }
 
                 try {
-                    await joinSession(
-                        message.sessionId,
-                        ws.user.userId,
-                        message.deviceId
-                    );
+                    await dbJoinSession(msg.sessionId, ws.user.userId, msg.deviceId);
                 } catch (err) {
                     ws.send(JSON.stringify({ type: "error", message: err.message }));
                     return;
                 }
 
-                ws.role = "viewer";
-                ws.sessionId = message.sessionId;
-                ws.deviceId = message.deviceId;
-                addViewer(message.sessionId, ws);
+                ws.role      = "viewer";
+                ws.sessionId = String(msg.sessionId);
+                ws.deviceId  = msg.deviceId;
 
+                session.viewers.set(ws.deviceId, ws);
+
+                // Tell viewer they joined
                 ws.send(JSON.stringify({
-                    type: "viewer_joined",
-                    sessionId: message.sessionId
+                    type:      "viewer_joined",
+                    sessionId: ws.sessionId,
+                    deviceId:  ws.deviceId
                 }));
 
-                console.log(`[VIEWER JOINED] userId: ${ws.user.userId} deviceId: ${message.deviceId}`);
+                // Tell host a viewer joined
+                sendToHost(ws.sessionId, {
+                    type:        "viewer_joined_session",
+                    sessionId:   ws.sessionId,
+                    deviceId:    ws.deviceId,
+                    userId:      ws.user.userId,
+                    viewerCount: session.viewers.size
+                });
+
+                console.log(`[Viewer] Joined userId=${ws.user.userId} device=${ws.deviceId} session=${ws.sessionId}`);
                 return;
             }
 
-            // Unknown message type
-            ws.send(JSON.stringify({
-                type: "error",
-                message: `Unknown message type: ${message.type}`
-            }));
+            // ------------------------------------------
+            // LEAVE - viewer or host exits cleanly
+            // ------------------------------------------
+            if (type === "leave") {
+                await handleLeave(ws);
+                return;
+            }
+
+            // ------------------------------------------
+            // STREAM STATS - host queries session info
+            // ------------------------------------------
+            if (type === "stream_stats") {
+                if (ws.role !== "host") {
+                    ws.send(JSON.stringify({ type: "error", message: "Host only" }));
+                    return;
+                }
+
+                const s = sessions.get(ws.sessionId);
+                ws.send(JSON.stringify({
+                    type:        "stream_stats",
+                    sessionId:   ws.sessionId,
+                    viewerCount: s?.viewers.size ?? 0,
+                    viewers:     s ? Array.from(s.viewers.keys()) : [],
+                    hostStats: {
+                        packetsIn: ws._pktIn,
+                        bytesIn:   ws._bytesIn,
+                        mbIn:      (ws._bytesIn / 1048576).toFixed(2)
+                    },
+                    sessionStats: s?.stats ?? null
+                }));
+                return;
+            }
+
+            // ------------------------------------------
+            // PING
+            // ------------------------------------------
+            if (type === "ping") {
+                ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+                return;
+            }
+
+            ws.send(JSON.stringify({ type: "error", message: `Unknown type: ${type}` }));
 
         } catch (err) {
-            console.error("Message error:", err.message);
-            console.error(err.stack);
-            ws.send(JSON.stringify({ type: "error", message: "Internal Server Error" }));
+            console.error("[WS] Message handler error:", err.message, err.stack);
+            try {
+                ws.send(JSON.stringify({ type: "error", message: "Internal error" }));
+            } catch (_) {}
         }
     });
 
-    // ----------------------------------------
-    // Disconnect Cleanup
-    // ----------------------------------------
+    // ------------------------------------------
+    // DISCONNECT
+    // ------------------------------------------
     ws.on("close", async (code) => {
-        console.log(`Disconnected: ${ws.id} Code: ${code}`);
-        clearTimeout(authTimeout);
+        clearTimeout(authTimer);
+        console.log(`[WS] Closed id=${ws._id} code=${code} role=${ws.role}`);
 
         try {
-            if (ws.role === "viewer" && ws.sessionId && ws.deviceId) {
-                await leaveSession(
-                    ws.sessionId,
-                    ws.user.userId,
-                    ws.deviceId
-                );
-            }
-
-            if (ws.role === "host" && ws.sessionId) {
-                try {
-                    await endSession(ws.sessionId, ws.user.userId);
-                } catch (_) {}
-            }
-
-            removeClient(ws);
-
+            await handleLeave(ws, true /* silent */);
         } catch (err) {
-            console.error("Cleanup error:", err.message);
+            console.error("[WS] Close cleanup error:", err.message);
         }
     });
-
-    ws.on("error", (err) => {
-        console.error(`Socket error [${ws.id}]:`, err.message);
-    });
 });
 
-wss.on("error", (err) => {
-    console.error("WebSocket Server Error:", err.message);
-});
+// ============================================
+// LEAVE HANDLER (shared by "leave" msg + close)
+// ============================================
+async function handleLeave(ws, silent = false) {
+    if (!ws.sessionId) return;
+
+    const sessionId = ws.sessionId;
+    const role      = ws.role;
+
+    // Clear so we dont double-process
+    ws.role      = null;
+    ws.sessionId = null;
+
+    if (role === "viewer") {
+        try {
+            await dbLeaveSession(sessionId, ws.user.userId, ws.deviceId);
+        } catch (_) {}
+
+        const s = sessions.get(sessionId);
+        if (s) {
+            s.viewers.delete(ws.deviceId);
+
+            // Tell host viewer left
+            sendToHost(sessionId, {
+                type:        "viewer_left",
+                sessionId,
+                deviceId:    ws.deviceId,
+                userId:      ws.user?.userId,
+                viewerCount: s.viewers.size
+            });
+
+            // Clean up if empty
+            if (!s.host && s.viewers.size === 0) {
+                destroySession(sessionId);
+            }
+        }
+
+        if (!silent) {
+            try {
+                ws.send(JSON.stringify({ type: "leave_success", sessionId }));
+            } catch (_) {}
+        }
+
+        console.log(`[Leave] Viewer userId=${ws.user?.userId} deviceId=${ws.deviceId} session=${sessionId}`);
+
+    } else if (role === "host") {
+        try {
+            await dbEndSession(sessionId, ws.user.userId);
+        } catch (_) {}
+
+        // Notify all viewers session ended
+        sendToAllViewers(sessionId, {
+            type:    "session_ended",
+            sessionId,
+            message: "Host ended the session"
+        });
+
+        const s = sessions.get(sessionId);
+        if (s) {
+            s.host = null;
+            if (s.viewers.size === 0) {
+                destroySession(sessionId);
+            }
+        }
+
+        if (!silent) {
+            try {
+                ws.send(JSON.stringify({ type: "leave_success", sessionId }));
+            } catch (_) {}
+        }
+
+        console.log(`[Leave] Host userId=${ws.user?.userId} session=${sessionId}`);
+    }
+}
+
+// ============================================
+// WS SERVER EVENTS
+// ============================================
+wss.on("error", err => console.error("[WSS] Server error:", err.message));
 
 wss.on("close", () => {
-    clearInterval(heartbeat);
-    console.log("WebSocket Server Closed");
+    clearInterval(heartbeatTimer);
+    console.log("[WSS] Server closed");
 });
 
 // ============================================
@@ -972,15 +947,38 @@ wss.on("close", () => {
 const PORT = process.env.PORT || 3000;
 
 httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`✓ WebSocket Server on port ${PORT}`);
-    console.log(`  Health: http://localhost:${PORT}/health`);
-    console.log(`  WS:     ws://localhost:${PORT}/ws`);
+    console.log(`✓ NeuralStream WebSocket Server`);
+    console.log(`  Port:     ${PORT}`);
+    console.log(`  Health:   /health`);
+    console.log(`  Sessions: /sessions`);
+    console.log(`  WS:       /ws`);
 });
 
-process.on("SIGTERM", () => {
-    clearInterval(heartbeat);
-    wss.clients.forEach((ws) => ws.close(1001, "Server shutting down"));
-    wss.close();
-    pool.end();
-    httpServer.close();
-});
+// ============================================
+// GRACEFUL SHUTDOWN
+// ============================================
+function shutdown(signal) {
+    console.log(`[Shutdown] ${signal} received`);
+    clearInterval(heartbeatTimer);
+
+    wss.clients.forEach(ws => {
+        try { ws.close(1001, "Server shutting down"); } catch (_) {}
+    });
+
+    sessions.forEach((_, id) => destroySession(id));
+
+    wss.close(() => {
+        pool.end(() => {
+            httpServer.close(() => {
+                console.log("[Shutdown] Clean exit");
+                process.exit(0);
+            });
+        });
+    });
+
+    // Force exit after 5s if clean shutdown hangs
+    setTimeout(() => process.exit(1), 5000);
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));
